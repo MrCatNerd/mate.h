@@ -64,47 +64,55 @@ typedef enum {
   ARG_PARSER_TOKEN_COMMA = 4,
   ARG_PARSER_TOKEN_NUMBER = 5,
   ARG_PARSER_TOKEN_STRING = 6,
-  ARG_PARSER_TOKEN_BOOL_TRUE = 7,
-  ARG_PARSER_TOKEN_BOOL_FALSE = 8,
+  ARG_PARSER_TOKEN_BOOL = 7,
 } argParserToken;
 
 typedef enum {
-  ARG_PARSER_FLAG_DATA_TYPE_VOID = 0,   // no type
-  ARG_PARSER_FLAG_DATA_TYPE_INT = 1,    // int
-  ARG_PARSER_FLAG_DATA_TYPE_UINT = 2,   // uint
-  ARG_PARSER_FLAG_DATA_TYPE_FLOAT = 2,  // float
-  ARG_PARSER_FLAG_DATA_TYPE_BOOL = 4,   // true | false | 0 | 1
-  ARG_PARSER_FLAG_DATA_TYPE_STRING = 5, // string
+  ARG_PARSER_DATA_TYPE_VOID = 0,   // void (no type)
+  ARG_PARSER_DATA_TYPE_INT = 1,    // int
+  ARG_PARSER_DATA_TYPE_FLOAT = 2,  // float
+  ARG_PARSER_DATA_TYPE_BOOL = 3,   // bool
+  ARG_PARSER_DATA_TYPE_STRING = 4, // string
+} argParserDataType;
 
-  // not sure if these ones are a good idea
-  // FLAG_DATA_TYPE_FEATURE = 6, // on | off | auto (like meson)
-  // FLAG_DATA_TYPE_LIST = 7,
-} flagDataType;
+typedef union ArgParserTypeData {
+  double number;
+  bool boolean;
+  String str;
+} ArgParserData;
+
+typedef struct {
+  ArgParserData data;
+  argParserDataType dataType;
+} ArgParserFlagData;
+VEC_TYPE(ArgParserFlagDataVector, ArgParserFlagData);
 
 typedef struct {
   String name;
-  void *data;
-  flagDataType dataType;
-} ArgParserFlagData;
+  ArgParserFlagDataVector flagDataVec;
+} ArgParserFlag;
+VEC_TYPE(ArgParserFlagVector, ArgParserFlag);
 
 typedef struct {
-  String data;
+  ArgParserData data;
   argParserToken type;
 } ArgParserTokenData;
-
 VEC_TYPE(ArgParserTokenVector, ArgParserTokenData);
 
 typedef struct {
   String name;
-  ArgParserTokenVector values;
+  ArgParserFlagVector values;
+  argParserDataType datatype;
 } ArgParserOption;
 
 VEC_TYPE(ArgParserOptionVec, ArgParserOption);
 VEC_TYPE(VectorU32, u32);
 
 typedef struct {
-  ArgParserTokenVector token_vec;
-} ArgumentDatatypeConfig;
+  ArgParserFlagVector userOptionVec;
+  ArgParserFlagVector mateOptionVec;
+  Arena *stringArena;
+} ArgParserContext;
 
 typedef struct {
   Compiler compiler;
@@ -125,7 +133,7 @@ typedef struct {
   i64 startTime;
   i64 totalTime;
 
-  ArgumentDatatypeConfig argConfig;
+  ArgParserContext argParserCtx;
 } MateConfig;
 
 typedef enum {
@@ -239,7 +247,6 @@ static void mateAddLibraryPaths(String *targetLibs, StringVector *libs);
   } while (0)
 static void mateLinkSystemLibraries(String *targetLibs, StringVector *libs);
 
-
 #define LinkFrameworks(target, ...)                        \
   do {                                                     \
     StringVector _frameworks = {0};                        \
@@ -252,7 +259,7 @@ static void mateLinkSystemLibraries(String *targetLibs, StringVector *libs);
   } while (0)
 static void mateLinkFrameworks(String *targetLibs, StringVector *frameworks);
 
-#define LinkFrameworksWithOptions(target, options, ...)                              \
+#define LinkFrameworksWithOptions(target, options, ...)                   \
   do {                                                                    \
     StringVector _frameworks = {0};                                       \
     StringVectorPushMany(_frameworks, __VA_ARGS__);                       \

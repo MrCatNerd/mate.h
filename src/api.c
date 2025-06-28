@@ -1,6 +1,7 @@
 #include "api.h"
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static MateConfig mateState = {0};
@@ -92,19 +93,23 @@ static void mateReadCache(void) {
   Assert(err == SUCCESS, "MateReadCache: Failed writing cache, err: %d", err);
 }
 
-static void mateParserInvalidToken(ArgParserTokenData *token) {
-  LogError("Invalid token while lexing arguments: %s", token->data.data);
-  // yeah that's pretty much it rn, no error handling
+static int mateParserError(const char *error) {
+  Assert(error != NULL, "String pointer is NULL");
+
+  // TODO: free memory on errors
+
+  LogError("mateArgParser: %s", error);
+  return -1;
 }
 
-static VectorU32 mateParserScanSeperators(const String str, const char *seperators, unsigned int seperators_len) {
+static VectorU32 mateParserScanSeperators(const String str) {
+  const char seperators[] = {'=', ','};
   VectorU32 positions = {0};
 
-  // naturally sorted from low to high
   for (size_t i = 0; i < str.length; i++) {
     const char cmpChar = str.data[i];
 
-    for (size_t j = 0; j < seperators_len; j++) {
+    for (size_t j = 0; j < sizeof(seperators) / sizeof(*seperators); j++) {
       const char sepChar = seperators[j];
 
       if (sepChar == cmpChar) VecPush(positions, i);
@@ -114,41 +119,39 @@ static VectorU32 mateParserScanSeperators(const String str, const char *seperato
   return positions;
 }
 
-// TODO: clean up the mess
+static size_t mateParserFindNearsetSeperator(const String currentWord, const size_t currentPosition) {
+  const VectorU32 sepPositions = mateParserScanSeperators(currentWord);
+
+  size_t nearestSep = currentWord.length;
+  for (size_t k = 0; k < sepPositions.length; k++) {
+    const u32 sepPosition = sepPositions.data[k];
+
+    if (currentPosition <= sepPosition && sepPosition < nearestSep) nearestSep = sepPosition;
+  }
+
+  return nearestSep;
+}
+
+/// returns 0 on success
 static int mateParseArguments(int argc, const char **argv) {
   Arena *stringArena = ArenaCreate(8);
-  // examples of possible use cases:
-  // bool: -Dtracy=true | -Dtracy=1 | -Dtracy=false | -Dtracy=-1
-  // uint: -Dcache_size_bytes 124124123123213
-  // int: -Dbraincells -12
-  // string: -Dlog verbose
-  // verbose mate: mate -v
-  // verbose verbose mate: mate -vv
-  // verbose verbese verbose mate: mate -vvv
-  // clean_cache: mate --clean-cace build
-  // set compiler: mate --compiler=/usr/bin/customcompiler
-  // set a samurai binary: --samu_bin_cache_path /usr/local/bin/matesamubincache/v1.9.0/samurai
 
   ArgParserTokenVector tokenVec = {0};
 
-  int err = 0;
   if (argc <= 1) {
-    err = -1;
-    return err;
-  }
+    return mateParserError("Invalid argc!");
+  } else if (argv == NULL) return mateParserError("Invalid argv!");
 
   // lexer
-
-  // actuall lexer frfr
   printf("\n");
   for (int i = 1; i < argc; i++) {
 
     const String currentWord = s(argv[i]);
 
-    VectorU32 sepPositions = mateParserScanSeperators(currentWord, (const char[]){'=', ','}, 2);
+    VectorU32 sepPositions = mateParserScanSeperators(currentWord);
 
     for (size_t j = 0; j < currentWord.length; j++) {
-      ArgParserTokenData tokenData = {.data = S(""), .type = ARG_PARSER_TOKEN_INVALID};
+      ArgParserTokenData tokenData = {.data.str = S(""), .type = ARG_PARSER_TOKEN_INVALID};
 
       const char currentToken = currentWord.data[j];
 
@@ -161,7 +164,7 @@ static int mateParseArguments(int argc, const char **argv) {
           tokenData.type = ARG_PARSER_TOKEN_FLAG_OPTION; // -D
 
           if (currentWord.length <= 2) { // if the entire word is just the flag (e.g. ./mate -D)
-            tokenData.data = S("");
+            tokenData.data.str = S("");
             j = currentWord.length - 1;
             continue;
           }
@@ -176,7 +179,7 @@ static int mateParseArguments(int argc, const char **argv) {
           }
 
           // set the data to the rest of the word, unless there is no data (./mate -D)
-          tokenData.data = StrNewSize(stringArena, currentWord.data + j, nearestSep - j);
+          tokenData.data.str = StrNewSize(stringArena, currentWord.data + j, nearestSep - j);
 
           // next word
           j = nearestSep - 1;
@@ -203,13 +206,13 @@ static int mateParseArguments(int argc, const char **argv) {
             printf("nan?.... %s\n", nan ? "true" : "false");
 
             Assert(k - j >= 0 && (k - j) <= (currentWord.length - j), "Math ain't mathing");
-            tokenData.data = StrNewSize(stringArena, currentWord.data + j, k - j);
+            tokenData.data.str = StrNewSize(stringArena, currentWord.data + j, k - j);
 
             tokenData.type = nan ? ARG_PARSER_TOKEN_STRING : ARG_PARSER_TOKEN_NUMBER;
 
             j = k - 1;
           } else {
-            tokenData.type = ARG_PARSER_TOKEN_FLAG; // -
+            tokenData.type = ARG_PARSER_TOKEN_FLAG;
             if (currentWord.length >= 2) {
               // find the nearest seperator
               size_t nearestSep = currentWord.length;
@@ -219,11 +222,11 @@ static int mateParseArguments(int argc, const char **argv) {
                 if (j <= sepPosition && sepPosition < nearestSep) nearestSep = sepPosition;
               }
 
-              tokenData.data = StrNewSize(stringArena, currentWord.data + (j + 1), nearestSep - 1);
+              tokenData.data.str = StrNewSize(stringArena, currentWord.data + (j + 1), nearestSep - 1);
 
               j = nearestSep - 1;
             } else {
-              tokenData.data = S("");
+              tokenData.data.str = S("");
               j = currentWord.length;
             };
           }
@@ -232,11 +235,11 @@ static int mateParseArguments(int argc, const char **argv) {
         }
         break;
       case '=':
-        tokenData.data = S("="); // kinda pointless lol
+        tokenData.data.str = S("=");
         tokenData.type = ARG_PARSER_TOKEN_EQUAL;
         break;
       case ',':
-        tokenData.data = S(",");
+        tokenData.data.str = S(",");
         tokenData.type = ARG_PARSER_TOKEN_COMMA;
         break;
       default:
@@ -245,65 +248,49 @@ static int mateParseArguments(int argc, const char **argv) {
           u32 k = j;
           while (currentWord.data[++k] != '"')
             if (currentWord.data[k] == '\0' || k > currentWord.length) {
-              mateParserInvalidToken(&tokenData);
-              break;
+              return mateParserError("Invalid string!");
             }
 
-          tokenData.data = StrNewSize(stringArena, currentWord.data + j + 1, k - j - 1);
+          tokenData.data.str = StrNewSize(stringArena, currentWord.data + j + 1, k - j - 1);
 
           tokenData.type = ARG_PARSER_TOKEN_STRING;
 
           j = k; // goto the end of the string
 
         } else if (currentToken == '\'') { // same thing but for ' instead of "
-          // try finding the next "
+          // try finding the next '
           u32 k = j;
           while (currentWord.data[++k] != '\'')
             if (currentWord.data[k] == '\0' || k > currentWord.length) {
-              mateParserInvalidToken(&tokenData);
-              break;
+              return mateParserError("Invalid string!");
             }
 
-          tokenData.data = StrNewSize(stringArena, currentWord.data + j + 1, k - j - 1);
+          tokenData.data.str = StrNewSize(stringArena, currentWord.data + j + 1, k - j - 1);
 
           tokenData.type = ARG_PARSER_TOKEN_STRING;
 
           j = k; // goto the end of the string
         } else if (strncmp(currentWord.data + j, "true", Min(2, currentWord.length)) == 0 && currentWord.length >= strlen("true")) {
-          tokenData.type = ARG_PARSER_TOKEN_BOOL_TRUE;
-          tokenData.data = S("true");
+          tokenData.type = ARG_PARSER_TOKEN_BOOL;
+          tokenData.data.boolean = true;
           j += strlen("true") - 1;
         } else if (strncmp(currentWord.data + j, "false", Min(2, currentWord.length)) == 0 && currentWord.length >= strlen("false")) {
-          tokenData.type = ARG_PARSER_TOKEN_BOOL_FALSE;
-          tokenData.data = S("false");
+          tokenData.type = ARG_PARSER_TOKEN_BOOL;
+          tokenData.data.boolean = false;
           j += strlen("false") - 1;
-        } else if (isdigit((unsigned char)currentToken)) {
-          u32 k = 0;
-          bool nan = false;
-          for (k = j + 1; k < currentWord.length; k++)
-            if (!isdigit((unsigned char)currentWord.data[k]) && currentWord.data[k] != '.') {
-              nan = true;
-              break;
-            }
-
-          Assert(k - j >= 0 && (k - j) <= (currentWord.length - j), "Math ain't mathing");
-          tokenData.data = StrNewSize(stringArena, currentWord.data + j, k - j);
-
-          tokenData.type = nan ? ARG_PARSER_TOKEN_STRING : ARG_PARSER_TOKEN_NUMBER;
-
-          j = k - 1;
         } else {
-          // turn the entire word into a string (until seperator)
-          // find the nearest seperator
-          size_t nearestSep = currentWord.length;
-          for (size_t k = 0; k < sepPositions.length; k++) {
-            const u32 sepPosition = sepPositions.data[k];
+          char *end = NULL;
+          const double value = strtod(currentWord.data + j, &end);
 
-            if (j <= sepPosition && sepPosition < nearestSep) nearestSep = sepPosition;
+          const unsigned int nearestSep = mateParserFindNearsetSeperator(currentWord, j);
+
+          if (end == currentWord.data + nearestSep) {
+            tokenData.type = ARG_PARSER_TOKEN_NUMBER;
+            tokenData.data.number = value;
+          } else {
+            tokenData.type = ARG_PARSER_TOKEN_STRING;
+            tokenData.data.str = StrNewSize(stringArena, currentWord.data + j, nearestSep - j);
           }
-
-          tokenData.data = StrNewSize(stringArena, currentWord.data + j, nearestSep - j);
-          tokenData.type = ARG_PARSER_TOKEN_STRING;
 
           j = nearestSep - 1;
         }
@@ -325,147 +312,122 @@ static int mateParseArguments(int argc, const char **argv) {
     default:
     case ARG_PARSER_TOKEN_INVALID:
       name = "TOK_INVALID";
+      LogInfo("%s(%s) ", name, tokenData.data.str.data);
       break;
     case ARG_PARSER_TOKEN_FLAG:
       name = "TOK_FLAG_SHORT";
+      LogInfo("%s(%s) ", name, tokenData.data.str.data);
       break;
     case ARG_PARSER_TOKEN_FLAG_OPTION:
       name = "TOK_FLAG_OPTION";
+      LogInfo("%s(%s) ", name, tokenData.data.str.data);
       break;
     case ARG_PARSER_TOKEN_EQUAL:
       name = "TOK_EQUAL";
+      LogInfo("%s(%s) ", name, tokenData.data.str.data);
       break;
     case ARG_PARSER_TOKEN_COMMA:
       name = "TOK_COMMA";
+      LogInfo("%s(%s) ", name, tokenData.data.str.data);
       break;
     case ARG_PARSER_TOKEN_NUMBER:
       name = "TOK_NUMBER";
+      LogInfo("%s(%f) ", name, tokenData.data.number);
       break;
     case ARG_PARSER_TOKEN_STRING:
       name = "TOK_STRING";
+      LogInfo("%s(%s) ", name, tokenData.data.str.data);
       break;
-
-    case ARG_PARSER_TOKEN_BOOL_TRUE:
-      name = "TOK_BOOL_TRUE";
-      break;
-    case ARG_PARSER_TOKEN_BOOL_FALSE:
-      name = "TOK_BOOL_FALSE";
+    case ARG_PARSER_TOKEN_BOOL:
+      if (tokenData.data.boolean) name = "TOK_BOOL_TRUE";
+      else name = "TOK_BOOL_FALSE";
+      LogInfo("%s(%s) ", name, tokenData.data.boolean ? "true" : "false");
       break;
     }
-
-    LogInfo("%s(%s) ", name, tokenData.data.data);
   }
   for (int i = 1; i < argc; i++) {
     printf("`%s` ", argv[i]);
   }
   printf("\n");
 
-  // actual parser
-  struct {
-    bool has_name;
-    ArgParserTokenData name;
-    bool has_values;
-    ArgParserTokenVector values;
-  } currentOption = {
-    .has_name = false,
-    .name = {.data = S(""), .type = ARG_PARSER_TOKEN_INVALID},
-    .has_values = false,
-    .values = {0},
-  };
-  VecPush(currentOption.values, ((ArgParserTokenData){.data = S(""), .type = ARG_PARSER_TOKEN_INVALID}));
-  ArgParserOptionVec userOptionVec = {0};
-  ArgParserOptionVec mateOptionVec = {0};
+  // parser
+  ArgParserFlagVector userOptionVec = {0};
+  ArgParserFlagVector mateOptionVec = {0};
 
+  ArgParserFlagVector *targetVector = NULL;
   for (size_t i = 0; i < tokenVec.length; i++) {
     const ArgParserTokenData tokenData = tokenVec.data[i];
 
     switch (tokenData.type) {
+    default:
+    case ARG_PARSER_TOKEN_INVALID:
+      return mateParserError("Invalid argument!");
+      break;
     case ARG_PARSER_TOKEN_FLAG:
+      Assert(tokenData.data.str.data != NULL && tokenData.data.str.length > 0, "Invalid string!");
+      targetVector = &mateOptionVec;
+      VecPush(*targetVector, ((ArgParserFlag){.name = tokenData.data.str, .flagDataVec = {0}}));
+      break;
     case ARG_PARSER_TOKEN_FLAG_OPTION:
-      // push the option to the vector, we do this here instead of every iteration so we can have multiple values per argument
-      if (currentOption.has_name && currentOption.has_values) {
-        const ArgParserOption option = {.name = currentOption.name.data, .values = currentOption.values};
-        if (currentOption.name.type == ARG_PARSER_TOKEN_FLAG) {
-          VecPush(mateOptionVec, option);
-        } else if (currentOption.name.type == ARG_PARSER_TOKEN_FLAG_OPTION) {
-          VecPush(userOptionVec, option);
-        }
-
-        currentOption.has_name = false;
-        currentOption.name = (ArgParserTokenData){.data = S(""), .type = ARG_PARSER_TOKEN_INVALID};
-        currentOption.has_values = false;
-        currentOption.values.data = 0;
-        currentOption.values.length = 0;
-        currentOption.values.capacity = 0;
-        VecPush(currentOption.values, ((ArgParserTokenData){.data = S(""), .type = ARG_PARSER_TOKEN_INVALID}));
-      }
-
-      if (!currentOption.has_values && currentOption.has_name) LogError("Option: `%s` is unassigned!", currentOption.name.data.data);
-      currentOption.name = tokenData;
-      currentOption.has_name = true;
+      Assert(tokenData.data.str.data != NULL && tokenData.data.str.length > 0, "Invalid string!");
+      targetVector = &userOptionVec;
+      VecPush(*targetVector, ((ArgParserFlag){.name = tokenData.data.str, .flagDataVec = {0}}));
       break;
     case ARG_PARSER_TOKEN_EQUAL:
     case ARG_PARSER_TOKEN_COMMA:
       // ignore
       break;
     case ARG_PARSER_TOKEN_NUMBER:
+      if (targetVector == NULL) {
+        LogError("mateArgParser: Unassigned value!, ignoring...");
+        break;
+      }
+      VecPush(targetVector->data[targetVector->length - 1].flagDataVec, ((ArgParserFlagData){.data = tokenData.data, .dataType = ARG_PARSER_DATA_TYPE_FLOAT}));
+      break;
     case ARG_PARSER_TOKEN_STRING:
-    case ARG_PARSER_TOKEN_BOOL_TRUE:
-    case ARG_PARSER_TOKEN_BOOL_FALSE:
-      if (!currentOption.has_name) LogError("Value: `%s` is unassigned!", tokenData.data.data);
-      VecPush(currentOption.values, tokenData);
-      currentOption.has_values = true;
-      break;
-    case ARG_PARSER_TOKEN_INVALID:
-      LogError("MateParser: Invalid token: `%s`", tokenData.data.data);
-      break;
-    default:
-      LogError("MateParser: Unknown token type!");
-      break;
-    }
-
-    // if this is the last iteration, push the option
-    if (currentOption.has_name && currentOption.has_values && i == tokenVec.length - 1) {
-      const ArgParserOption option = {.name = currentOption.name.data, .values = currentOption.values};
-      if (currentOption.name.type == ARG_PARSER_TOKEN_FLAG) {
-        VecPush(mateOptionVec, option);
-      } else if (currentOption.name.type == ARG_PARSER_TOKEN_FLAG_OPTION) {
-        VecPush(userOptionVec, option);
+      if (targetVector == NULL) {
+        LogError("mateArgParser: Unassigned value!, ignoring...");
+        break;
       }
 
-      currentOption.has_name = false;
-      currentOption.name = (ArgParserTokenData){.data = S(""), .type = ARG_PARSER_TOKEN_INVALID};
-      currentOption.has_values = false;
-      currentOption.values.data = 0;
-      currentOption.values.length = 0;
-      currentOption.values.capacity = 0;
-      VecPush(currentOption.values, ((ArgParserTokenData){.data = S(""), .type = ARG_PARSER_TOKEN_INVALID}));
+      VecPush(targetVector->data[targetVector->length - 1].flagDataVec, ((ArgParserFlagData){.data = tokenData.data, .dataType = ARG_PARSER_DATA_TYPE_STRING}));
+      break;
+    case ARG_PARSER_TOKEN_BOOL:
+      if (targetVector == NULL) {
+        LogError("mateArgParser: Unassigned value!, ignoring...");
+        break;
+      }
+
+      VecPush(targetVector->data[targetVector->length - 1].flagDataVec, ((ArgParserFlagData){.data = tokenData.data, .dataType = ARG_PARSER_DATA_TYPE_BOOL}));
+      break;
     }
   }
 
-  for (size_t i = 0; i < userOptionVec.length; i++) {
-    const ArgParserOption option = userOptionVec.data[i];
-    printf("User option: %s=", option.name.data);
-    for (size_t j = 1; j < option.values.length; j++) {
-      printf("`%s`", option.values.data[j].data.data);
-      if (j > 0 && j + 1 < option.values.length) printf(",");
-    }
-    printf("\n");
-  }
-
-  for (size_t i = 0; i < mateOptionVec.length; i++) {
-    const ArgParserOption option = mateOptionVec.data[i];
-    printf("Mate option: %s=%s\n", option.name.data, option.name.data);
-  }
-
+  // free the token vector
   if (tokenVec.data) VecFree(tokenVec);
 
-  if (userOptionVec.data) VecFree(userOptionVec);
-  if (mateOptionVec.data) VecFree(mateOptionVec);
+  // TODO: check for duplicate options and merge them (e.g. ./mate -Dcat=hmm -Dcat=meoow)
 
-  ArenaFree(stringArena);
+  return 0;
+}
 
-  return err;
+static void argParserFreeContext(void) {
+  // free user options
+  for (size_t i = 0; i < mateState.argParserCtx.userOptionVec.length; i++) {
+    ArgParserFlag flag = mateState.argParserCtx.userOptionVec.data[i];
+    if (flag.flagDataVec.data != NULL && flag.flagDataVec.length > 0) VecFree(flag.flagDataVec);
+  }
+  if (mateState.argParserCtx.userOptionVec.data != NULL && mateState.argParserCtx.userOptionVec.length > 0) VecFree(mateState.argParserCtx.userOptionVec);
+
+  // free mate options
+  for (size_t i = 0; i < mateState.argParserCtx.mateOptionVec.length; i++) {
+    ArgParserFlag flag = mateState.argParserCtx.mateOptionVec.data[i];
+    if (flag.flagDataVec.data != NULL && flag.flagDataVec.length > 0) VecFree(flag.flagDataVec);
+  }
+  if (mateState.argParserCtx.mateOptionVec.data != NULL && mateState.argParserCtx.mateOptionVec.length > 0) VecFree(mateState.argParserCtx.mateOptionVec);
+
+  // free string arena
+  ArenaFree(mateState.argParserCtx.stringArena);
 }
 
 void StartBuild(int argc, const char **argv) {
@@ -1490,23 +1452,23 @@ static void mateLinkFrameworks(String *targetLibs, StringVector *frameworks) {
 
 static void mateLinkFrameworksWithOptions(String *targetLibs, LinkFrameworkOptions options, StringVector *frameworks) {
   Assert(!isGCC(),
-          "LinkFrameworks: Automatic framework linking is not supported by GCC. "
-          "Use standard linking functions after adding a framework path instead.");
+         "LinkFrameworks: Automatic framework linking is not supported by GCC. "
+         "Use standard linking functions after adding a framework path instead.");
   Assert(isClang(), "LinkFrameworks: This function is only supported for Clang.");
 
   char *frameworkFlag = NULL;
   switch (options) {
-    case none:
-      frameworkFlag = "-framework";
-      break;
-    case needed:
-      frameworkFlag = "-needed_framework";
-      break;
-    case weak:
-      frameworkFlag = "-weak_framework";
-      break;
-    default:
-      Assert(0, "LinkFrameworks: Invalid framework linking option provided.");
+  case none:
+    frameworkFlag = "-framework";
+    break;
+  case needed:
+    frameworkFlag = "-needed_framework";
+    break;
+  case weak:
+    frameworkFlag = "-weak_framework";
+    break;
+  default:
+    Assert(0, "LinkFrameworks: Invalid framework linking option provided.");
   }
 
   StringBuilder builder = StringBuilderCreate(mateState.arena);
@@ -1594,6 +1556,8 @@ static void mateAddFrameworkPaths(String *targetIncludes, StringVector *includes
 void EndBuild(void) {
   LogInfo("Build took: " FMT_I64 "ms", mateState.totalTime);
   ArenaFree(mateState.arena);
+
+  argParserFreeContext();
 }
 
 /* --- Utils Implementation --- */
